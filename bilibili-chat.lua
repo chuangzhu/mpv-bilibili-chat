@@ -1,4 +1,5 @@
 local websocket = require'http.websocket'
+local http_request = require'http.request'
 local zlib = require'zlib'
 local cqueues = require'cqueues'
 local utils = require'mp.utils'
@@ -73,8 +74,25 @@ function parse(protocol, op, payload)
 				time = json.info[1][5] - started_time
 			}
 			-- print(json.info[1][5] - started_time, json.info[2])
+		elseif json.cmd == 'SUPER_CHAT_MESSAGE' then
+			messages[#messages+1] = {
+				type = SUPERCHAT,
+				author = json.data.user_info.uname,
+				money = json.data.price,
+				border_color = hex2bgr(json.data.background_bottom_color),
+				-- text_color = text_color,
+				contents = json.data.message,
+				time = json.data.start_time - started_time
+			}
 		end
 	end
+end
+
+function hex2bgr(hex)
+	local r = hex.sub(2, 3)
+	local g = hex.sub(4, 5)
+	local b = hex.sub(6, 7)
+	return b .. g .. r
 end
 
 function reset()
@@ -112,6 +130,24 @@ function load_chat(roomid)
 	step_timer = mp.add_periodic_timer(0.01, function() cq:step() end)
 end
 
+function request(uri)
+	r = http_request.new_from_uri(uri)
+	r.headers['referer'] = 'https://www.bilibili.com'
+	r.headers['user-agent'] = 'Mozilla/5.0'
+	return r
+end
+
+function auto_load()
+	local path = mp.get_property_native('path')
+	local roomid = path:match('^https://live.bilibili.com/([0-9]+)')
+	if roomid ~= nil then
+		local r = request('https://api.live.bilibili.com/xlive/web-room/v1/index/getRoomPlayInfo?room_id=' .. roomid)
+		local _, stream = r:go()
+		local realid = utils.parse_json(stream:get_body_as_string()).data.room_id
+		load_chat(realid)
+	end
+end
+
 function update_chat_overlay(time)
 	if time == nil or chat_overlay == nil then return end
 	local msec = time * 1000
@@ -147,7 +183,8 @@ function chat_message_to_string(message)
 	elseif message.type == SUPERCHAT then
 		if message.contents then
 			return string.format(
-				'%s %s: %s',
+				'{\\1c&Hffffff&}{\\3c&H%06x&}%s %s: %s',
+				message.border_color,
 				message.author,
 				message.money,
 				message.contents
@@ -157,5 +194,9 @@ function chat_message_to_string(message)
 	end
 end
 
-mp.add_key_binding(nil, 'load-bili-chat', load_chat)
+mp.register_script_message('load-bili-chat', load_chat)
 mp.observe_property('time-pos', 'native', function(_, time) update_chat_overlay(time) end)
+
+if opts['auto-load'] then
+	mp.register_event("file-loaded", auto_load)
+end
