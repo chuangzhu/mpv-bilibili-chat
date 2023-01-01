@@ -71,12 +71,14 @@ function parse(protocol, op, payload)
 				type = NORMAL,
 				author = json.info[3][2],
 				author_color = json.info[3][1] % 0x1000000,
-				badge = json.info[4][2],
-				badge_level = json.info[4][1],
-				badge_color = json.info[4][5] and rgb2bgr(json.info[4][5]),
 				contents = json.info[2],
 				time = json.info[1][5] - started_time
 			}
+			if opts['show-badge'] and next(json.info[4]) ~= nil then
+				messages[#messages].badge = json.info[4][2]
+				messages[#messages].badge_level = json.info[4][1]
+				messages[#messages].badge_color = rgb2bgr(json.info[4][5])
+			end
 			-- print(json.info[4][2], json.info[4][1], json.info[4][5])
 			-- print(json.info[1][5] - started_time, json.info[2])
 		elseif json.cmd == 'SUPER_CHAT_MESSAGE' then
@@ -168,12 +170,7 @@ function update_chat_overlay(time)
 	chat_overlay.data = ''
 	for i, msg in ipairs(messages) do
 		if msg.time < msec and msg.time + opts['message-duration'] > msec then
-			local message_string = string.format(
-				'{\\an%s}{\\fs%s}%s',
-				opts['anchor'],
-				opts['font-size'],
-				chat_message_to_string(msg)
-			)
+			local message_string = chat_message_to_string(msg)
 			chat_overlay.data = message_string .. '\n' .. chat_overlay.data
 		end
 	end
@@ -183,8 +180,8 @@ end
 -- Copyright 2022, Boo
 -- SPDX-License-Identifier: MIT
 function chat_message_to_string(message)
+	local str = string.format('{\\an%s}{\\fs%s}', opts['anchor'], opts['font-size'])
 	if message.type == NORMAL then
-		local str = ''
 		if opts['show-badge'] and message.badge ~= nil then
 			str = str .. string.format(
 				'{\\1c&Hffffff&}{\\3c&H%06x&}%s{\\3c&Hffffff&}{\\1c&H%06x&}%s{\\3c&H000000&} ',
@@ -195,22 +192,25 @@ function chat_message_to_string(message)
 			)
 		end
 		if opts['show-author'] then
-			str = str .. string.format('{\\1c&H%06x&}%s{\\1c&Hffffff&}: ', message.author_color, message.author)
-		end
-		str = str .. message.contents
-		return str
-	elseif message.type == SUPERCHAT then
-		if message.contents then
-			return string.format(
-				'{\\1c&Hffffff&}{\\3c&H%06x&}%s %s: %s',
-				message.border_color,
-				message.author,
-				message.money,
-				message.contents
+			str = str .. string.format(
+				'{\\1c&H%06x&}%s{\\1c&Hffffff&}: ',
+				message.author_color,
+				message.author
 			)
 		end
-		return string.format('%s %s', message.author, message.money)
+		str = str .. message.contents
+	elseif message.type == SUPERCHAT then
+		str = str .. string.format(
+			'{\\1c&Hffffff&}{\\3c&H%06x&}%s %s',
+			message.border_color,
+			message.author,
+			message.money
+		)
+		if message.contents then
+			str = str .. string.format(': %s', message.contents)
+		end
 	end
+	return str
 end
 
 mp.register_script_message('load-bili-chat', load_chat)
