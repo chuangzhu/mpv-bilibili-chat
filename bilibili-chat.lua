@@ -89,10 +89,10 @@ function parse(protocol, op, payload)
 end
 
 function hex2bgr(hex)
-	local r = hex.sub(2, 3)
-	local g = hex.sub(4, 5)
-	local b = hex.sub(6, 7)
-	return b .. g .. r
+	local r = tonumber(string.sub(hex, 2, 3), 16)
+	local g = tonumber(string.sub(hex, 4, 5), 16)
+	local b = tonumber(string.sub(hex, 6, 7), 16)
+	return b*0x10000 + g*0x100 + r
 end
 
 function reset()
