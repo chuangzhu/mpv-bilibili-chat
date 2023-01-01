@@ -1,27 +1,24 @@
-local socket = require'socket'
+local websocket = require'http.websocket'
 local zlib = require'zlib'
+local cqueues = require'cqueues'
 local utils = require'mp.utils'
 local options = require'mp.options'
 
 local NORMAL = 0
 local SUPERCHAT = 1
 local messages = {}
-local client = nil
 local chat_overlay = nil
-local polling_timer = nil
 local heartbeat_timer = nil
+local step_timer = nil
 local started_time = nil
+local cq = nil
 
 local opts = {}
 opts['auto-load'] = false
 opts['show-author'] = true
-opts['color'] = 'random'
-opts['font-size'] = 16
+opts['font-size'] = 30
 opts['message-duration'] = 10000
-opts['max-message-line-length'] = 40
-opts['message-gap'] = 10
 opts['anchor'] = 1
-opts['parse-interval'] = 0.5
 options.read_options(opts)
 
 -- length = 4, byteorder = 'big'
@@ -46,29 +43,21 @@ function encode(op, payload)
 	return to_bytes(16 + #payload) .. '\0\16\0\1' .. to_bytes(op) .. '\0\0\0\1' .. payload
 end
 
-function receive()
-	local body = client:receive(4)
-	if body == nil then return end
-	local length = from_bytes(body)
-	client:receive(2)
-	local protocol = from_bytes(client:receive(2))
-	local op = from_bytes(client:receive(4))
-	client:receive(4)
-	local payload = client:receive(length - 16)
-	if protocol == 0 then
-		parse(protocol, op, payload)
-	elseif protocol == 2 then
-		local inflate = zlib.inflate()
-		local blob = inflate(payload)
-		cur = 0
-		while cur < #blob do
-			length = from_bytes(string.sub(blob, cur + 1, cur + 4))
-			protocol = from_bytes(string.sub(blob, cur + 7, cur + 8))
-			op = from_bytes(string.sub(blob, cur + 9, cur + 12))
-			payload = string.sub(blob, cur + 17, cur + length)
+function decode(str)
+	local cur = 0
+	while cur < #str do
+		length = from_bytes(string.sub(str, cur + 1, cur + 4))
+		protocol = from_bytes(string.sub(str, cur + 7, cur + 8))
+		op = from_bytes(string.sub(str, cur + 9, cur + 12))
+		payload = string.sub(str, cur + 17, cur + length)
+		if protocol == 0 then
 			parse(protocol, op, payload)
-			cur = cur + length
+		elseif protocol == 2 then
+			local inflate = zlib.inflate()
+			local blob = inflate(payload)
+			decode(blob)
 		end
+		cur = cur + length
 	end
 end
 
@@ -83,24 +72,24 @@ function parse(protocol, op, payload)
 				contents = json.info[2],
 				time = json.info[1][5] - started_time
 			}
-			print(json.info[1][5] - started_time, json.info[2])
+			-- print(json.info[1][5] - started_time, json.info[2])
 		end
 	end
 end
 
 function reset()
 	messages = {}
-	if polling_timer ~= nil then
-		polling_timer:kill()
-		polling_timer = nil
-	end
 	if heartbeat_timer ~= nil then
 		heartbeat_timer:kill()
 		heartbeat_timer = nil
 	end
-	if client ~= nil then
-		client:close()
-		client = nil
+	if step_timer ~= nil then
+		step_timer:kill()
+		step_timer = nil
+	end
+	if cq ~= nil then
+		cq:close()
+		cq = nil
 	end
 	chat_overlay = nil
 	started_time = nil
@@ -108,14 +97,19 @@ end
 
 function load_chat(roomid)
 	reset()
-	client = socket.tcp()
-	client:settimeout(0)
-	client:connect('broadcastlv.chat.bilibili.com', 2243)
-	client:send(encode(7, '{"roomid":' .. roomid .. '}'))
-	started_time = math.floor((socket.gettime() - mp.get_property_native('time-pos') - mp.get_property_native('time-remaining'))*1000)
-	polling_timer = mp.add_periodic_timer(0.1, receive)
-	heartbeat_timer = mp.add_periodic_timer(30, function() client:send(encode(2, '')) end)
+	local ws = websocket.new_from_uri('wss://broadcastlv.chat.bilibili.com/sub')
+	ws:connect()
+	ws:send(encode(7, '{"roomid":' .. roomid .. '}'))
+	started_time = math.floor((os.time() - mp.get_property_native('time-pos') - mp.get_property_native('time-remaining'))*1000)
+	heartbeat_timer = mp.add_periodic_timer(30, function() ws:send(encode(2, '')) end)
 	chat_overlay = mp.create_osd_overlay("ass-events")
+	cq = cqueues.new()
+	cq:wrap(function()
+		while true do
+			decode(ws:receive())
+		end
+	end)
+	step_timer = mp.add_periodic_timer(0.01, function() cq:step() end)
 end
 
 function update_chat_overlay(time)
@@ -124,16 +118,13 @@ function update_chat_overlay(time)
 	chat_overlay.data = ''
 	for i, msg in ipairs(messages) do
 		if msg.time < msec and msg.time + opts['message-duration'] > msec then
-			local message_string = chat_message_to_string(msg)
-			if opts['anchor'] <= 3 then
-				chat_overlay.data = message_string
-					.. '\n{\\fscy' .. opts['message-gap'] .. '}{\\fscx0}\\h{\fscy\fscx}'
-					.. chat_overlay.data
-			else
-				chat_overlay.data = chat_overlay.data
-					.. '{\\fscy' .. opts['message-gap'] .. '}{\\fscx0}\\h{\fscy\fscx}\n'
-					.. message_string
-			end
+			local message_string = string.format(
+				'{\\an%s}{\\fs%s}%s',
+				opts['anchor'],
+				opts['font-size'],
+				chat_message_to_string(msg)
+			)
+			chat_overlay.data = message_string .. '\n' .. chat_overlay.data
 		end
 	end
 	chat_overlay:update()
@@ -144,27 +135,12 @@ end
 function chat_message_to_string(message)
 	if message.type == NORMAL then
 		if opts['show-author'] then
-			if opts['color'] == 'random' then
-				return string.format(
-					'{\\1c&H%06x&}%s{\\1c&Hffffff&}: %s',
-					message.author_color,
-					message.author,
-					message.contents
-				)
-			elseif opts['color'] == 'none' then
-				return string.format(
-					'%s: %s',
-					message.author,
-					message.contents
-				)
-			else
-				return string.format(
-					'{\\1c&H%s&}%s{\\1c&Hffffff&}: %s',
-					swap_color_string(opts['color']),
-					message.author,
-					message.contents
-				)
-			end
+			return string.format(
+				'{\\1c&H%06x&}%s{\\1c&Hffffff&}: %s',
+				message.author_color,
+				message.author,
+				message.contents
+			)
 		else
 			return message.contents
 		end
