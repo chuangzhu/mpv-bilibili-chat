@@ -16,6 +16,7 @@ local cq = nil
 
 local opts = {}
 opts['auto-load'] = false
+opts['show-badge'] = false
 opts['show-author'] = true
 opts['font-size'] = 30
 opts['message-duration'] = 10000
@@ -70,9 +71,13 @@ function parse(protocol, op, payload)
 				type = NORMAL,
 				author = json.info[3][2],
 				author_color = json.info[3][1] % 0x1000000,
+				badge = json.info[4][2],
+				badge_level = json.info[4][1],
+				badge_color = json.info[4][5] and rgb2bgr(json.info[4][5]),
 				contents = json.info[2],
 				time = json.info[1][5] - started_time
 			}
+			-- print(json.info[4][2], json.info[4][1], json.info[4][5])
 			-- print(json.info[1][5] - started_time, json.info[2])
 		elseif json.cmd == 'SUPER_CHAT_MESSAGE' then
 			messages[#messages+1] = {
@@ -86,6 +91,15 @@ function parse(protocol, op, payload)
 			}
 		end
 	end
+end
+
+function rgb2bgr(int)
+	local b = int % 0x100
+	int = math.floor(int / 0x100)
+	local g = int % 0x100
+	int = math.floor(int / 0x100)
+	local r = int % 0x100
+	return b*0x10000 + g*0x100 + r
 end
 
 function hex2bgr(hex)
@@ -170,16 +184,21 @@ end
 -- SPDX-License-Identifier: MIT
 function chat_message_to_string(message)
 	if message.type == NORMAL then
-		if opts['show-author'] then
-			return string.format(
-				'{\\1c&H%06x&}%s{\\1c&Hffffff&}: %s',
-				message.author_color,
-				message.author,
-				message.contents
+		local str = ''
+		if opts['show-badge'] and message.badge ~= nil then
+			str = str .. string.format(
+				'{\\1c&Hffffff&}{\\3c&H%06x&}%s{\\3c&Hffffff&}{\\1c&H%06x&}%s{\\3c&H000000&} ',
+				message.badge_color,
+				message.badge,
+				message.badge_color,
+				message.badge_level
 			)
-		else
-			return message.contents
 		end
+		if opts['show-author'] then
+			str = str .. string.format('{\\1c&H%06x&}%s{\\1c&Hffffff&}: ', message.author_color, message.author)
+		end
+		str = str .. message.contents
+		return str
 	elseif message.type == SUPERCHAT then
 		if message.contents then
 			return string.format(
