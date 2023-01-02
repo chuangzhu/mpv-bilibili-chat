@@ -1,3 +1,6 @@
+-- package.path = '@path@;' .. package.path
+-- package.cpath = '@cpath@;' .. package.cpath
+
 local websocket = require'http.websocket'
 local http_request = require'http.request'
 local zlib = require'zlib'
@@ -7,6 +10,7 @@ local options = require'mp.options'
 
 local NORMAL = 0
 local SUPERCHAT = 1
+local GIFT = 2
 local messages = {}
 local chat_overlay = nil
 local heartbeat_timer = nil
@@ -18,6 +22,7 @@ local opts = {}
 opts['auto-load'] = false
 opts['show-badge'] = false
 opts['show-author'] = true
+opts['show-gift'] = false
 opts['font-size'] = 30
 opts['message-duration'] = 10000
 opts['anchor'] = 1
@@ -41,6 +46,7 @@ function from_bytes(str)
 	return int
 end
 
+-- https://github.com/lovelyyoshino/Bilibili-Live-API/blob/019d519/API.WebSocket.md
 function encode(op, payload)
 	return to_bytes(16 + #payload) .. '\0\16\0\1' .. to_bytes(op) .. '\0\0\0\1' .. payload
 end
@@ -70,7 +76,7 @@ function parse(protocol, op, payload)
 			messages[#messages+1] = {
 				type = NORMAL,
 				author = json.info[3][2],
-				author_color = json.info[3][1] % 0x1000000,
+				author_color = uid2color(json.info[3][1]),
 				contents = json.info[2],
 				time = json.info[1][5] - started_time
 			}
@@ -79,9 +85,8 @@ function parse(protocol, op, payload)
 				messages[#messages].badge_level = json.info[4][1]
 				messages[#messages].badge_color = rgb2bgr(json.info[4][5])
 			end
-			-- print(json.info[4][2], json.info[4][1], json.info[4][5])
-			-- print(json.info[1][5] - started_time, json.info[2])
 		elseif json.cmd == 'SUPER_CHAT_MESSAGE' then
+			-- print('\27]9;' .. payload .. '\27\\')
 			messages[#messages+1] = {
 				type = SUPERCHAT,
 				author = json.data.user_info.uname,
@@ -89,7 +94,28 @@ function parse(protocol, op, payload)
 				border_color = hex2bgr(json.data.background_bottom_color),
 				-- text_color = text_color,
 				contents = json.data.message,
-				time = json.data.start_time - started_time
+				time = json.data.start_time*1000 - started_time
+			}
+		elseif json.cmd == 'SEND_GIFT' and opts['show-gift'] then
+			-- Ignore free gifts as they don't count combos and flood the chat
+			if json.data.discount_price == 0 then return end
+			for i, msg in ipairs(messages) do
+				if json.data.batch_combo_id ~= "" and msg.combo_id == json.data.batch_combo_id then
+					table.insert(messages, table.remove(messages, i))
+					messages[#messages].count = messages[#messages].count + json.data.num
+					messages[#messages].time = json.data.timestamp*1000 - started_time
+					return
+				end
+			end
+			messages[#messages+1] = {
+				type = GIFT,
+				author = json.data.uname,
+				author_color = uid2color(json.data.uid),
+				combo_id = json.data.batch_combo_id,
+				count = json.data.num,
+				-- money = json.data.discount_price,
+				contents = json.data.giftName,
+				time = json.data.timestamp*1000 - started_time
 			}
 		end
 	end
@@ -108,6 +134,16 @@ function hex2bgr(hex)
 	local r = tonumber(string.sub(hex, 2, 3), 16)
 	local g = tonumber(string.sub(hex, 4, 5), 16)
 	local b = tonumber(string.sub(hex, 6, 7), 16)
+	return b*0x10000 + g*0x100 + r
+end
+
+function uid2color(uid)
+	local int = uid % 0x1000000
+	local b = 127 + math.floor((int % 0x100) / 2)
+	int = math.floor(int / 0x100)
+	local g = 127 + math.floor((int % 0x100) / 2)
+	int = math.floor(int / 0x100)
+	local r = 127 + math.floor((int % 0x100) / 2)
 	return b*0x10000 + g*0x100 + r
 end
 
@@ -134,7 +170,9 @@ function load_chat(roomid)
 	local ws = websocket.new_from_uri('wss://broadcastlv.chat.bilibili.com/sub')
 	ws:connect()
 	ws:send(encode(7, '{"roomid":' .. roomid .. '}'))
-	started_time = math.floor((os.time() - mp.get_property_native('time-pos') - mp.get_property_native('time-remaining'))*1000)
+	started_time = math.floor(1000*(
+		os.time() - (mp.get_property_native('time-pos') or 0)
+		- (mp.get_property_native('time-remaining') or 0)))
 	heartbeat_timer = mp.add_periodic_timer(30, function() ws:send(encode(2, '')) end)
 	chat_overlay = mp.create_osd_overlay("ass-events")
 	cq = cqueues.new()
@@ -200,15 +238,24 @@ function chat_message_to_string(message)
 		end
 		str = str .. message.contents
 	elseif message.type == SUPERCHAT then
-		str = str .. string.format(
-			'{\\1c&Hffffff&}{\\3c&H%06x&}%s %s',
-			message.border_color,
-			message.author,
-			message.money
+		local style = str .. string.format(
+			'{\\1c&Hffffff&}{\\3c&H%06x&}{\\bord5}{\\shad2}',
+			message.border_color
 		)
+		str = style .. string.format('%s ¥%s', message.author, message.money)
 		if message.contents then
-			str = str .. string.format(': %s', message.contents)
+			if opts['anchor'] <= 3 then
+				str = style .. message.contents .. '\n' .. str .. ':'
+			else str = str .. ':\n' .. style .. message.contents end
 		end
+	elseif message.type == GIFT and opts['show-gift'] then
+		str = str .. string.format(
+			'{\\1c&H%06x&}%s{\\1c&Hffffff&} 赠送了 %s×%s',
+			message.author_color,
+			message.author,
+			message.count,
+			message.contents
+		)
 	end
 	return str
 end
