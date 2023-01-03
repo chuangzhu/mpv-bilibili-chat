@@ -31,12 +31,12 @@ options.read_options(opts)
 
 -- length = 4, byteorder = 'big'
 function to_bytes(int)
-	local t = {}
+	local str = ''
 	for i = 0, 3 do
-		t[4-i] = int % 0x100
+		str = string.char(int % 0x100) .. str
 		int = math.floor(int / 0x100)
 	end
-	return string.char(table.unpack(t))
+	return str
 end
 
 function from_bytes(str)
