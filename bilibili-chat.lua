@@ -79,6 +79,7 @@ function parse(protocol, op, payload)
 				author = json.info[3][2],
 				author_color = uid2color(json.info[3][1]),
 				contents = json.info[2],
+				member = json.info[8],
 				time = json.info[1][5] - started_time
 			}
 			if opts['show-badge'] and next(json.info[4]) ~= nil then
@@ -87,7 +88,6 @@ function parse(protocol, op, payload)
 				messages[#messages].badge_color = rgb2bgr(json.info[4][5])
 			end
 		elseif json.cmd == 'SUPER_CHAT_MESSAGE' then
-			-- print('\27]9;' .. payload .. '\27\\')
 			messages[#messages+1] = {
 				type = SUPERCHAT,
 				author = json.data.user_info.uname,
@@ -117,6 +117,17 @@ function parse(protocol, op, payload)
 				-- money = json.data.discount_price,
 				contents = json.data.giftName,
 				time = json.data.timestamp*1000 - started_time
+			}
+		elseif json.cmd == 'GUARD_BUY' and opts['show-gift'] then
+			-- print('\27]9;' .. payload .. '\27\\')
+			messages[#messages+1] = {
+				type = GIFT,
+				author = json.data.username,
+				author_color = uid2color(json.data.uid),
+				count = json.data.num,
+				-- money = json.data.price,
+				contents = json.data.gift_name,
+				time = json.data.start_time*1000 - started_time
 			}
 		end
 	end
@@ -240,10 +251,18 @@ function chat_message_to_string(message)
 		end
 		if opts['show-author'] then
 			str = str .. string.format(
-				'{\\1c&H%06x&}%s{\\1c&Hffffff&}: ',
+				'{\\1c&H%06x&}%s',
 				message.author_color,
 				message.author
 			)
+			if message.member == 1 then
+				str = str .. ' {\\1c&Hddf1fd&}{\\3c&H4139c2&}⚓'
+			elseif message.member == 2 then
+				str = str .. ' {\\1c&Hffe6f0&}{\\3c&Hc84b75&}⚓'
+			elseif message.member == 3 then
+				str = str .. ' {\\1c&Hf4f1d7&}{\\3c&Hce745e&}⚓'
+			end
+			str = str .. '{\\1c&Hffffff&}{\\3c&H000000&}: '
 		end
 		str = str .. message.contents
 	elseif message.type == SUPERCHAT then
