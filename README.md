@@ -2,6 +2,8 @@
 
 Mpv script that overlays bilibili live chat messages on top of the livestream.
 
+![mpv-bilibili-chat](https://user-images.githubusercontent.com/31200881/210378962-c63c3389-954d-4b0a-aaaf-6ef68bda9ed9.png)
+
 ## Installation
 
 Dependencies:

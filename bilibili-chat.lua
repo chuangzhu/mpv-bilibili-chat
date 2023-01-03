@@ -25,7 +25,7 @@ opts['show-badge'] = false
 opts['show-author'] = true
 opts['show-gift'] = false
 opts['font-size'] = 30
-opts['message-duration'] = 10000
+opts['message-num'] = 20
 opts['anchor'] = 1
 options.read_options(opts)
 
@@ -100,8 +100,8 @@ function parse(protocol, op, payload)
 		elseif json.cmd == 'SEND_GIFT' and opts['show-gift'] then
 			-- Ignore free gifts as they don't count combos and flood the chat
 			if json.data.discount_price == 0 then return end
-			for i, msg in ipairs(messages) do
-				if json.data.batch_combo_id ~= "" and msg.combo_id == json.data.batch_combo_id then
+			for i = #messages, math.max(#messages-opts['message-num']+1, 1), -1 do
+				if json.data.batch_combo_id ~= "" and messages[i].combo_id == json.data.batch_combo_id then
 					table.insert(messages, table.remove(messages, i))
 					messages[#messages].count = messages[#messages].count + json.data.num
 					messages[#messages].time = json.data.timestamp*1000 - started_time
@@ -211,11 +211,13 @@ function update_chat_overlay(time)
 	if time == nil or chat_overlay == nil then return end
 	chat_overlay.data = ''
 	if chat_visible then
-		local msec = time * 1000
-		for i, msg in ipairs(messages) do
-			if msg.time < msec and msg.time + opts['message-duration'] > msec then
-				local message_string = chat_message_to_string(msg)
-				chat_overlay.data = message_string .. '\n' .. chat_overlay.data
+		for i = #messages, 1, -1 do
+			if messages[i].time <= time*1000 then
+				for j = math.max(i-opts['message-num']+1, 1), i do
+					local message_string = chat_message_to_string(messages[j])
+					chat_overlay.data = message_string .. '\n' .. chat_overlay.data
+				end
+				break
 			end
 		end
 	end
