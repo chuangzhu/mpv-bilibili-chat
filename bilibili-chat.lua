@@ -17,6 +17,7 @@ local heartbeat_timer = nil
 local step_timer = nil
 local started_time = nil
 local cq = nil
+local chat_visible = true
 
 local opts = {}
 opts['auto-load'] = false
@@ -161,8 +162,12 @@ function reset()
 		cq:close()
 		cq = nil
 	end
-	chat_overlay = nil
+	if chat_overlay ~= nil then
+		chat_overlay:remove()
+		chat_overlay = nil
+	end
 	started_time = nil
+	chat_visible = true
 end
 
 function load_chat(roomid)
@@ -204,12 +209,14 @@ end
 
 function update_chat_overlay(time)
 	if time == nil or chat_overlay == nil then return end
-	local msec = time * 1000
 	chat_overlay.data = ''
-	for i, msg in ipairs(messages) do
-		if msg.time < msec and msg.time + opts['message-duration'] > msec then
-			local message_string = chat_message_to_string(msg)
-			chat_overlay.data = message_string .. '\n' .. chat_overlay.data
+	if chat_visible then
+		local msec = time * 1000
+		for i, msg in ipairs(messages) do
+			if msg.time < msec and msg.time + opts['message-duration'] > msec then
+				local message_string = chat_message_to_string(msg)
+				chat_overlay.data = message_string .. '\n' .. chat_overlay.data
+			end
 		end
 	end
 	chat_overlay:update()
@@ -260,9 +267,22 @@ function chat_message_to_string(message)
 	return str
 end
 
-mp.register_script_message('load-bili-chat', load_chat)
-mp.observe_property('time-pos', 'native', function(_, time) update_chat_overlay(time) end)
+function toggle_chat()
+	if chat_overlay == nil then
+		auto_load()
+		return
+	end
+	chat_visible = not chat_visible
+	update_chat_overlay(mp.get_property_native('time-pos'))
+end
+
+mp.register_script_message('load-bilibili-chat', load_chat)
+mp.add_key_binding(nil, 'load-chat', auto_load)
+mp.add_key_binding(nil, 'unload-chat', reset)
+mp.add_key_binding(nil, 'toggle-chat', toggle_chat)
 
 if opts['auto-load'] then
 	mp.register_event("file-loaded", auto_load)
 end
+mp.observe_property('time-pos', 'native', function(_, time) update_chat_overlay(time) end)
+mp.register_event("end-file", reset)
